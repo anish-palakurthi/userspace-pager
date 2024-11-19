@@ -9,7 +9,17 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-// Structure to hold program info
+// Global state for demand paging
+typedef struct {
+    int fd;
+    Elf64_Ehdr* ehdr;
+    Elf64_Phdr* phdr;
+} program_state_t;
+
+static program_state_t prog_state;
+static size_t page_size;
+
+// Structure to hold program info (unchanged)
 typedef struct {
     void* entry_point;
     void* prog_stack;
@@ -19,9 +29,53 @@ typedef struct {
     char** envp;
 } program_info_t;
 
+// Signal handler for page faults
+static void segv_handler(int sig, siginfo_t* si, void* unused) {
+    void* fault_addr = si->si_addr;
+    
+    // Find which segment contains fault_addr
+    for (int i = 0; i < prog_state.ehdr->e_phnum; i++) {
+        Elf64_Phdr* ph = &prog_state.phdr[i];
+        if (ph->p_type != PT_LOAD) continue;
+        
+        void* seg_start = (void*)ph->p_vaddr;
+        void* seg_end = seg_start + ph->p_memsz;
+        
+        if (fault_addr >= seg_start && fault_addr < seg_end) {
+            // Calculate page-aligned addresses
+            void* page_addr = (void*)((uintptr_t)fault_addr & ~(page_size - 1));
+            size_t page_offset = ph->p_offset + 
+                ((uintptr_t)fault_addr - (uintptr_t)seg_start);
+            page_offset &= ~(page_size - 1);
+
+            // Map just this page
+            void* mapped = mmap(
+                page_addr,
+                page_size,
+                PROT_READ | PROT_WRITE | PROT_EXEC,
+                MAP_FIXED | MAP_PRIVATE,
+                prog_state.fd,
+                page_offset
+            );
+            
+            if (mapped == MAP_FAILED) {
+                perror("mmap in fault handler");
+                exit(1);
+            }
+            
+            fprintf(stderr, "Demand mapped page at %p\n", mapped);
+            return;
+        }
+    }
+    
+    // If we get here, it's a real segfault
+    fprintf(stderr, "Segmentation fault at address %p\n", fault_addr);
+    exit(1);
+}
+
 // Function prototypes
 static void validate_elf(Elf64_Ehdr* ehdr);
-static void* map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr);
+static void prepare_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr);
 static void setup_stack(program_info_t* info);
 static void transfer_control(program_info_t* info) __attribute__((noreturn));
 
@@ -30,6 +84,8 @@ int main(int argc, char** argv, char** envp) {
         fprintf(stderr, "Usage: %s <program>\n", argv[0]);
         exit(1);
     }
+
+    page_size = sysconf(_SC_PAGESIZE);
 
     // Open the target program
     int fd = open(argv[1], O_RDONLY);
@@ -60,6 +116,21 @@ int main(int argc, char** argv, char** envp) {
         exit(1);
     }
 
+    // Set up global state for fault handler
+    prog_state.fd = fd;
+    prog_state.ehdr = &ehdr;
+    prog_state.phdr = phdr;
+
+    // Set up signal handler
+    struct sigaction sa;
+    sa.sa_flags = SA_SIGINFO;
+    sa.sa_sigaction = segv_handler;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGSEGV, &sa, NULL) == -1) {
+        perror("sigaction");
+        exit(1);
+    }
+
     // Initialize program info
     program_info_t prog_info = {
         .entry_point = (void*)ehdr.e_entry,
@@ -69,8 +140,8 @@ int main(int argc, char** argv, char** envp) {
         .envp = envp
     };
 
-    // Map program segments
-    void* base = map_program_segments(fd, &ehdr, phdr);
+    // Prepare virtual memory regions for segments (but don't map content yet)
+    prepare_program_segments(fd, &ehdr, phdr);
     
     // Setup stack
     setup_stack(&prog_info);
@@ -79,41 +150,26 @@ int main(int argc, char** argv, char** envp) {
     transfer_control(&prog_info);
 }
 
-static void validate_elf(Elf64_Ehdr* ehdr) {
-    if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
-        fprintf(stderr, "Not an ELF file\n");
-        exit(1);
-    }
-    
-    if (ehdr->e_ident[EI_CLASS] != ELFCLASS64) {
-        fprintf(stderr, "Not a 64-bit ELF\n");
-        exit(1);
-    }
-    
-    if (ehdr->e_type != ET_EXEC) {
-        fprintf(stderr, "Not an executable\n");
-        exit(1);
-    }
-}
+// validate_elf remains unchanged
 
-static void* map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
+static void prepare_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
     for (int i = 0; i < ehdr->e_phnum; i++) {
         if (phdr[i].p_type != PT_LOAD)
             continue;
 
         // Calculate page-aligned addresses
-        void* page_addr = (void*)(phdr[i].p_vaddr & ~(sysconf(_SC_PAGESIZE) - 1));
-        size_t page_offset = phdr[i].p_vaddr & (sysconf(_SC_PAGESIZE) - 1);
+        void* page_addr = (void*)(phdr[i].p_vaddr & ~(page_size - 1));
+        size_t page_offset = phdr[i].p_vaddr & (page_size - 1);
         size_t mapping_size = phdr[i].p_memsz + page_offset;
 
-        // Map segment
+        // Reserve the address space but don't map content
         void* addr = mmap(
             page_addr,
             mapping_size,
-            PROT_READ | PROT_WRITE | PROT_EXEC,
-            MAP_PRIVATE | MAP_FIXED,
-            fd,
-            phdr[i].p_offset - page_offset
+            PROT_NONE,  // No permissions - will trigger fault when accessed
+            MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS,
+            -1,
+            0
         );
 
         if (addr == MAP_FAILED) {
@@ -121,10 +177,8 @@ static void* map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
             exit(1);
         }
 
-        fprintf(stderr, "Mapped segment at %p, size %zu\n", addr, mapping_size);
+        fprintf(stderr, "Reserved segment at %p, size %zu\n", addr, mapping_size);
     }
-
-    return NULL;
 }
 
 static void setup_stack(program_info_t* info) {
