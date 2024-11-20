@@ -30,8 +30,13 @@ typedef struct {
 } program_info_t;
 
 // Signal handler for page faults
-static void segv_handler(int sig, siginfo_t* si, void* unused) {
+static void segv_handler(int sig __attribute__((unused)), 
+                        siginfo_t* si, 
+                        void* unused __attribute__((unused))) {
     void* fault_addr = si->si_addr;
+    
+    // Rest of handler remains the same
+
     
     // Find which segment contains fault_addr
     for (int i = 0; i < prog_state.ehdr->e_phnum; i++) {
@@ -152,7 +157,9 @@ int main(int argc, char** argv, char** envp) {
 
 
 
-static void prepare_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
+static void prepare_program_segments(int fd __attribute__((unused)), 
+                                   Elf64_Ehdr* ehdr, 
+                                   Elf64_Phdr* phdr) {
     for (int i = 0; i < ehdr->e_phnum; i++) {
         if (phdr[i].p_type != PT_LOAD)
             continue;
@@ -199,18 +206,39 @@ static void setup_stack(program_info_t* info) {
     }
 
     // Stack grows down - start at the top
-    void* stack_top = info->prog_stack + info->stack_size;
+    char** stack_top = (char**)(info->prog_stack + info->stack_size);
     
-    // TODO: Set up auxiliary vectors, environment, and argv
-    // This is a placeholder - actual implementation needs careful stack setup
+    // Setup the stack content
+    char** stack_ptr = stack_top;
+
+    // Auxiliary vectors (placeholder)
+    stack_ptr -= 2;
+    stack_ptr[0] = NULL;
+    stack_ptr[1] = NULL;
+
+    // Environment variables (placeholder)
+    stack_ptr -= 1;
+    stack_ptr[0] = NULL;
+
+    // argv
+    stack_ptr -= info->argc + 1;
+    for (int i = 0; i < info->argc; i++) {
+        stack_ptr[i] = info->argv[i];
+    }
+    stack_ptr[info->argc] = NULL;
+
+    // Save the final stack pointer
+    info->prog_stack = stack_ptr;
     
-    fprintf(stderr, "Stack allocated at %p\n", info->prog_stack);
+    fprintf(stderr, "Stack allocated at %p\n", stack_ptr);
 }
 
 static void transfer_control(program_info_t* info) {
-    // Zero all registers and jump to entry point
+    // Use registers directly
+    register unsigned long entry asm("rax") = (unsigned long)info->entry_point;
+    register unsigned long stack asm("rsp") = (unsigned long)info->prog_stack;
+    
     asm volatile(
-        "xor %%rax, %%rax\n"
         "xor %%rbx, %%rbx\n"
         "xor %%rcx, %%rcx\n"
         "xor %%rdx, %%rdx\n"
@@ -224,8 +252,29 @@ static void transfer_control(program_info_t* info) {
         "xor %%r13, %%r13\n"
         "xor %%r14, %%r14\n"
         "xor %%r15, %%r15\n"
-        "jmp *%0"
-        : : "r"(info->entry_point) : "memory"
+        "jmp *%%rax\n"
+        :
+        : "r" (stack), "r" (entry)
+        : "memory", "rbx", "rcx", "rdx", "rsi", "rdi",
+          "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
     );
     __builtin_unreachable();
+}
+
+
+static void validate_elf(Elf64_Ehdr* ehdr) {
+    if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
+        fprintf(stderr, "Not an ELF file\n");
+        exit(1);
+    }
+    
+    if (ehdr->e_ident[EI_CLASS] != ELFCLASS64) {
+        fprintf(stderr, "Not a 64-bit ELF\n");
+        exit(1);
+    }
+    
+    if (ehdr->e_type != ET_EXEC) {
+        fprintf(stderr, "Not an executable\n");
+        exit(1);
+    }
 }

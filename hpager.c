@@ -295,18 +295,39 @@ static void setup_stack(program_info_t* info) {
     }
 
     // Stack grows down - start at the top
-    void* stack_top = info->prog_stack + info->stack_size;
+    char** stack_top = (char**)(info->prog_stack + info->stack_size);
     
-    // TODO: Set up auxiliary vectors, environment, and argv
-    // This is a placeholder - actual implementation needs careful stack setup
+    // Setup the stack content
+    char** stack_ptr = stack_top;
+
+    // Auxiliary vectors (placeholder)
+    stack_ptr -= 2;
+    stack_ptr[0] = NULL;
+    stack_ptr[1] = NULL;
+
+    // Environment variables (placeholder)
+    stack_ptr -= 1;
+    stack_ptr[0] = NULL;
+
+    // argv
+    stack_ptr -= info->argc + 1;
+    for (int i = 0; i < info->argc; i++) {
+        stack_ptr[i] = info->argv[i];
+    }
+    stack_ptr[info->argc] = NULL;
+
+    // Save the final stack pointer
+    info->prog_stack = stack_ptr;
     
-    fprintf(stderr, "Stack allocated at %p\n", info->prog_stack);
+    fprintf(stderr, "Stack allocated at %p\n", stack_ptr);
 }
 
 static void transfer_control(program_info_t* info) {
-    // Zero all registers and jump to entry point
+    // Use registers directly
+    register unsigned long entry asm("rax") = (unsigned long)info->entry_point;
+    register unsigned long stack asm("rsp") = (unsigned long)info->prog_stack;
+    
     asm volatile(
-        "xor %%rax, %%rax\n"
         "xor %%rbx, %%rbx\n"
         "xor %%rcx, %%rcx\n"
         "xor %%rdx, %%rdx\n"
@@ -320,8 +341,11 @@ static void transfer_control(program_info_t* info) {
         "xor %%r13, %%r13\n"
         "xor %%r14, %%r14\n"
         "xor %%r15, %%r15\n"
-        "jmp *%0"
-        : : "r"(info->entry_point) : "memory"
+        "jmp *%%rax\n"
+        :
+        : "r" (stack), "r" (entry)
+        : "memory", "rbx", "rcx", "rdx", "rsi", "rdi",
+          "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
     );
     __builtin_unreachable();
 }
