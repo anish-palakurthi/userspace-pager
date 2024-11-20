@@ -27,9 +27,8 @@ test_progs: $(TEST_PROGS)
 test: $(TARGETS) test_progs
 	@echo "Testing null pointer handling..."
 	-./apager test_null
-	# -./dpager test_null
-	# -./hpager test_null
-	
+	-./apager test_array
+	-./apager test_bss
 
 
 clean:

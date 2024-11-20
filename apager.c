@@ -88,7 +88,7 @@ static void map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
 
         // First mapping
         void* mapped = mmap(
-            NULL,
+            (void*)aligned_addr,  // Use aligned address
             mapping_size,
             initial_prot,
             MAP_PRIVATE,
@@ -108,7 +108,12 @@ static void map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
         if (phdr[i].p_memsz > phdr[i].p_filesz) {
             void* bss_start = (void*)(vaddr + phdr[i].p_filesz);
             size_t bss_size = phdr[i].p_memsz - phdr[i].p_filesz;
-            memset(bss_start, 0, bss_size);
+
+            // Align the memory address to a 16-byte boundary
+            uintptr_t aligned_bss_start = (uintptr_t)bss_start & ~0xFULL;
+            size_t aligned_bss_size = bss_size + ((uintptr_t)bss_start - aligned_bss_start);
+
+            memset((void*)aligned_bss_start, 0, aligned_bss_size);
         }
 
         // Set final permissions
