@@ -88,10 +88,10 @@ static void map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
 
         // First mapping
         void* mapped = mmap(
-            (void*)aligned_addr,
+            NULL,
             mapping_size,
             initial_prot,
-            MAP_PRIVATE | MAP_FIXED,
+            MAP_PRIVATE,
             fd,
             offset
         );
@@ -234,10 +234,10 @@ static void transfer_control(program_info_t* info) {
           "S" (argv),    // rsi
           "d" (envp)     // rdx
         : "memory", "rax", "rbx", "rcx", "r8", "r9", "r10", 
-          "r12", "r13", "r14", "r15", "rbp"
+          "r12", "r13", "r14", "r15"
     );
     __builtin_unreachable();
-}
+}   
 
 int main(int argc, char** argv, char** envp) {
     if (argc < 2) {

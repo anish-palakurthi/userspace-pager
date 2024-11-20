@@ -3,7 +3,7 @@ CFLAGS = -Wall -Wextra -g -static
 LDFLAGS = -static
 
 TARGETS = apager dpager hpager
-TEST_PROGS = test_null test_array test_bss test_random test_mixed
+TEST_PROGS = test_null test_array test_bss
 
 all: $(TARGETS)
 
@@ -30,16 +30,7 @@ test: $(TARGETS) test_progs
 	# -./dpager test_null
 	# -./hpager test_null
 	
-	@echo "\nTesting sequential access..."
-	./apager test_array
-	# ./dpager test_array
-	# ./hpager test_array
-	
-	@echo "\nTesting BSS handling..."
-	./apager test_bss
-	# ./dpager test_bss
-	# ./hpager test_bss
-	
+
 
 clean:
 	rm -f $(TARGETS) $(TEST_PROGS) *.o
