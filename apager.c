@@ -8,7 +8,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
+#include <errno.h>
 typedef struct {
     void* entry_point;
     void* prog_stack;
@@ -34,89 +34,168 @@ static void validate_elf(Elf64_Ehdr* ehdr) {
 }
 
 static void map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
+    // Verify file first
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
+        perror("fstat");
+        exit(1);
+    }
+    fprintf(stderr, "File size: %ld bytes\n", st.st_size);
+
+    fprintf(stderr, "Entry point: %lx\n", (unsigned long)ehdr->e_entry);
+    
     for (int i = 0; i < ehdr->e_phnum; i++) {
         if (phdr[i].p_type != PT_LOAD)
             continue;
 
-        // Calculate page-aligned addresses
         size_t page_size = sysconf(_SC_PAGESIZE);
-        void* page_addr = (void*)(phdr[i].p_vaddr & ~(page_size - 1));
-        size_t page_offset = phdr[i].p_vaddr & (page_size - 1);
-        size_t mapping_size = phdr[i].p_memsz + page_offset;
-
-        // Map segment
-        void* addr = mmap(
-            page_addr,
-            mapping_size,
-            PROT_READ | PROT_WRITE | PROT_EXEC,
-            MAP_PRIVATE | MAP_FIXED,
-            fd,
-            phdr[i].p_offset - page_offset
-        );
-
-        if (addr == MAP_FAILED) {
-            perror("mmap");
+        uintptr_t vaddr = phdr[i].p_vaddr;
+        uintptr_t aligned_addr = vaddr & ~(page_size - 1);
+        size_t page_offset = vaddr & (page_size - 1);
+        
+        // Verify segment size doesn't exceed file size
+        if (phdr[i].p_offset + phdr[i].p_filesz > (size_t)st.st_size) {
+            fprintf(stderr, "Segment extends beyond file size\n");
             exit(1);
         }
 
-        fprintf(stderr, "Mapped segment at %p, offset %lu, size %zu\n", 
-                addr, phdr[i].p_offset - page_offset, mapping_size);
+        size_t mapping_size = phdr[i].p_memsz + page_offset;
+        mapping_size = (mapping_size + page_size - 1) & ~(page_size - 1);
+
+        off_t offset = phdr[i].p_offset & ~(page_size - 1);
+
+        // Set permissions - start with RW
+        int initial_prot = PROT_READ | PROT_WRITE;
+        int final_prot = PROT_NONE;
+        if (phdr[i].p_flags & PF_R) final_prot |= PROT_READ;
+        if (phdr[i].p_flags & PF_W) final_prot |= PROT_WRITE;
+        if (phdr[i].p_flags & PF_X) final_prot |= PROT_EXEC;
+
+        fprintf(stderr, "Mapping segment %d:\n", i);
+        fprintf(stderr, "  vaddr: 0x%lx\n", vaddr);
+        fprintf(stderr, "  offset in file: 0x%lx\n", phdr[i].p_offset);
+        fprintf(stderr, "  filesz: %lu\n", phdr[i].p_filesz);
+        fprintf(stderr, "  memsz: %lu\n", phdr[i].p_memsz);
+        fprintf(stderr, "  flags: 0x%x\n", phdr[i].p_flags);
+        fprintf(stderr, "  final_prot: 0x%x\n", final_prot);
+
+        // Try to read from file at offset to verify
+        char verify_buf[1];
+        if (pread(fd, verify_buf, 1, phdr[i].p_offset) != 1) {
+            perror("pread verify");
+            exit(1);
+        }
+
+        // First mapping
+        void* mapped = mmap(
+            (void*)aligned_addr,
+            mapping_size,
+            initial_prot,
+            MAP_PRIVATE | MAP_FIXED,
+            fd,
+            offset
+        );
+
+        if (mapped == MAP_FAILED) {
+            fprintf(stderr, "mmap failed: %s\n", strerror(errno));
+            fprintf(stderr, "  attempted mapping at: 0x%lx\n", aligned_addr);
+            fprintf(stderr, "  size: %zu\n", mapping_size);
+            fprintf(stderr, "  offset: 0x%lx\n", offset);
+            exit(1);
+        }
+
+        // Zero BSS if needed
+        if (phdr[i].p_memsz > phdr[i].p_filesz) {
+            void* bss_start = (void*)(vaddr + phdr[i].p_filesz);
+            size_t bss_size = phdr[i].p_memsz - phdr[i].p_filesz;
+            memset(bss_start, 0, bss_size);
+        }
+
+        // Set final permissions
+        if (mprotect(mapped, mapping_size, final_prot) == -1) {
+            perror("mprotect");
+            exit(1);
+        }
+
+        fprintf(stderr, "Successfully mapped segment %d at %p\n", i, mapped);
     }
+
+    // Verify final mappings
+    fprintf(stderr, "Final memory mappings:\n");
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "cat /proc/%d/maps", getpid());
+    system(cmd);
 }
 
 static void setup_stack(program_info_t* info) {
-    // Allocate new stack
+    // Map stack with fixed address to avoid conflicts
+    void* stack_addr = (void*)0x7ffff7000000;  // Choose a high address
     void* stack = mmap(
-        NULL,
+        stack_addr,
         info->stack_size,
         PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK | MAP_FIXED,
         -1,
         0
     );
 
     if (stack == MAP_FAILED) {
-        perror("mmap stack");
+        fprintf(stderr, "Stack allocation failed: %s\n", strerror(errno));
         exit(1);
     }
 
-    // Stack grows down - start at the top
-    char** stack_ptr = (char**)(stack + info->stack_size);
-
-    // Push args onto stack from top down
+    // Stack grows down - start at the top and align
+    void* stack_top = stack + info->stack_size;
+    uint64_t* stack_ptr = (uint64_t*)((uintptr_t)stack_top & ~15ULL);
     
-    // First, copy arguments
+    // Count environment variables
     int envc = 0;
     for (char** env = info->envp; *env != NULL; env++) {
         envc++;
     }
 
-    // Push auxiliary vector (null for now)
-    stack_ptr--;
-    *stack_ptr = NULL;
-    stack_ptr--;
-    *stack_ptr = NULL;
-
-    // Push environment pointers
-    for (int i = envc; i >= 0; i--) {
-        stack_ptr--;
-        *stack_ptr = info->envp[i];
-    }
-
-    // Push argument pointers
-    for (int i = info->argc; i >= 0; i--) {
-        stack_ptr--;
-        *stack_ptr = (i == info->argc) ? NULL : info->argv[i];
-    }
-
+    // Reserve space for everything
+    stack_ptr -= 1;  // For alignment
+    stack_ptr = (uint64_t*)((uintptr_t)stack_ptr & ~15ULL);
+    
+    // Write values from bottom up
+    uint64_t* base = stack_ptr;
+    
     // Push argc
-    stack_ptr--;
-    *(int*)stack_ptr = info->argc;
+    *stack_ptr++ = info->argc;
+    
+    // Push argv pointers
+    char** argv_base = (char**)stack_ptr;
+    for (int i = 0; i < info->argc; i++) {
+        *stack_ptr++ = (uint64_t)info->argv[i];
+    }
+    *stack_ptr++ = 0;  // NULL terminator
+    
+    // Push envp pointers
+    char** envp_base = (char**)stack_ptr;
+    for (int i = 0; i < envc; i++) {
+        *stack_ptr++ = (uint64_t)info->envp[i];
+    }
+    *stack_ptr++ = 0;  // NULL terminator
 
-    info->prog_stack = stack_ptr;
-    fprintf(stderr, "Stack allocated at %p, stack pointer at %p\n", stack, stack_ptr);
+    // Return to the base for the actual stack pointer
+    info->prog_stack = base;
+
+    fprintf(stderr, "Stack setup:\n");
+    fprintf(stderr, "  Base address: %p\n", stack);
+    fprintf(stderr, "  Stack pointer: %p\n", base);
+    fprintf(stderr, "  argv base: %p\n", argv_base);
+    fprintf(stderr, "  envp base: %p\n", envp_base);
+    fprintf(stderr, "  argc: %d\n", info->argc);
+
+    // Verify stack contents
+    fprintf(stderr, "Stack contents:\n");
+    uint64_t* verify = base;
+    fprintf(stderr, "  argc: %ld\n", *verify++);
+    for (int i = 0; i < info->argc; i++) {
+        fprintf(stderr, "  argv[%d]: %s\n", i, (char*)*verify++);
+    }
 }
-
 static void transfer_control(program_info_t* info) {
     // According to System V AMD64 ABI:
     // rdi = argc
@@ -143,19 +222,19 @@ static void transfer_control(program_info_t* info) {
         "xor %%r13, %%r13\n"
         "xor %%r14, %%r14\n"
         "xor %%r15, %%r15\n"
-        // "xor %%rbp, %%rbp\n"  // Remove this line
+        "xor %%rbp, %%rbp\n"  // Clear frame pointer
         // Set up stack frame and jump
         "mov %[stack], %%rsp\n"
         "pushq %[entry]\n"
         "ret\n"
         : 
         : [entry] "r" (entry),
-        [stack] "r" (stack),
-        "D" (argc),    // rdi
-        "S" (argv),    // rsi
-        "d" (envp)     // rdx
+          [stack] "r" (stack),
+          "D" (argc),    // rdi
+          "S" (argv),    // rsi
+          "d" (envp)     // rdx
         : "memory", "rax", "rbx", "rcx", "r8", "r9", "r10", 
-        "r12", "r13", "r14", "r15" // Remove "rbp" from the clobber list
+          "r12", "r13", "r14", "r15", "rbp"
     );
     __builtin_unreachable();
 }

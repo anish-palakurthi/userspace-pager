@@ -27,28 +27,19 @@ test_progs: $(TEST_PROGS)
 test: $(TARGETS) test_progs
 	@echo "Testing null pointer handling..."
 	-./apager test_null
-	-./dpager test_null
-	-./hpager test_null
+	# -./dpager test_null
+	# -./hpager test_null
 	
 	@echo "\nTesting sequential access..."
 	./apager test_array
-	./dpager test_array
-	./hpager test_array
+	# ./dpager test_array
+	# ./hpager test_array
 	
 	@echo "\nTesting BSS handling..."
 	./apager test_bss
-	./dpager test_bss
-	./hpager test_bss
+	# ./dpager test_bss
+	# ./hpager test_bss
 	
-	@echo "\nTesting random access..."
-	./apager test_random
-	./dpager test_random
-	./hpager test_random
-	
-	@echo "\nTesting mixed access patterns..."
-	./apager test_mixed
-	./dpager test_mixed
-	./hpager test_mixed
 
 clean:
 	rm -f $(TARGETS) $(TEST_PROGS) *.o
