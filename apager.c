@@ -50,8 +50,9 @@ static void map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
 
         size_t page_size = sysconf(_SC_PAGESIZE);
         uintptr_t vaddr = phdr[i].p_vaddr;
-        uintptr_t aligned_addr = vaddr & ~(page_size - 1);
-        size_t page_offset = vaddr & (page_size - 1);
+        uintptr_t aligned_vaddr = vaddr & ~0x3FULL; // Align vaddr to 64-byte boundary
+        uintptr_t aligned_addr = aligned_vaddr & ~(page_size - 1);
+        size_t page_offset = aligned_vaddr & (page_size - 1);
         
         // Verify segment size doesn't exceed file size
         if (phdr[i].p_offset + phdr[i].p_filesz > (size_t)st.st_size) {
@@ -96,24 +97,28 @@ static void map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
             offset
         );
 
-        if (mapped == MAP_FAILED) {
-            fprintf(stderr, "mmap failed: %s\n", strerror(errno));
-            fprintf(stderr, "  attempted mapping at: 0x%lx\n", aligned_addr);
-            fprintf(stderr, "  size: %zu\n", mapping_size);
-            fprintf(stderr, "  offset: 0x%lx\n", offset);
-            exit(1);
-        }
 
-        // Zero BSS if needed
         if (phdr[i].p_memsz > phdr[i].p_filesz) {
-            void* bss_start = (void*)(vaddr + phdr[i].p_filesz);
+            void* bss_start = (void*)((uintptr_t)mapped + phdr[i].p_filesz);
             size_t bss_size = phdr[i].p_memsz - phdr[i].p_filesz;
 
-            // Align the memory address to a 16-byte boundary
-            uintptr_t aligned_bss_start = (uintptr_t)bss_start & ~0xFULL;
-            size_t aligned_bss_size = bss_size + ((uintptr_t)bss_start - aligned_bss_start);
+            // Ensure bss_start is within the mapped region
+            if ((uintptr_t)bss_start >= (uintptr_t)mapped &&
+                (uintptr_t)bss_start < (uintptr_t)mapped + mapping_size) {
+                
+                // Calculate remaining space in the mapped region
+                size_t remaining_space = ((uintptr_t)mapped + mapping_size) - (uintptr_t)bss_start;
+                
+                // Adjust bss_size if it exceeds the remaining space
+                if (bss_size > remaining_space) {
+                    bss_size = remaining_space;
+                }
 
-            memset((void*)aligned_bss_start, 0, aligned_bss_size);
+                // Zero out the BSS section
+                memset(bss_start, 0, bss_size);
+            } else {
+                fprintf(stderr, "Warning: BSS section outside mapped region\n");
+            }
         }
 
         // Set final permissions
@@ -202,10 +207,7 @@ static void setup_stack(program_info_t* info) {
     }
 }
 static void transfer_control(program_info_t* info) {
-    // According to System V AMD64 ABI:
-    // rdi = argc
-    // rsi = argv
-    // rdx = envp
+
     register unsigned long stack asm("rsp") = (unsigned long)info->prog_stack;
     register int argc asm("rdi") = info->argc;
     register char** argv asm("rsi") = (char**)((char*)info->prog_stack + 8);
