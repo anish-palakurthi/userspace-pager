@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
+
 typedef struct {
     void* entry_point;
     void* prog_stack;
@@ -138,142 +139,174 @@ static void map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
 }
 
 static void setup_stack(program_info_t* info) {
-    // Map stack with fixed address to avoid conflicts
-    void* stack_addr = (void*)0x7ffff7000000;  // Choose a high address
+    // Map stack with fixed address - use a lower address to avoid conflicts
+    const size_t page_size = sysconf(_SC_PAGESIZE);
+    size_t aligned_stack_size = (info->stack_size + page_size - 1) & ~(page_size - 1);
+    
+    // Use a different stack address that's less likely to conflict
+    void* stack_addr = (void*)0x700000000000;  // 128TB range
     void* stack = mmap(
         stack_addr,
-        info->stack_size,
+        aligned_stack_size,
         PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK | MAP_FIXED,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK,  // Removed MAP_FIXED to let kernel choose if needed
         -1,
         0
     );
 
     if (stack == MAP_FAILED) {
-        fprintf(stderr, "Stack allocation failed: %s\n", strerror(errno));
+        perror("mmap stack");
+        fprintf(stderr, "Errno: %d\n", errno);
         exit(1);
     }
 
-    // Calculate space needed for strings
-    size_t strings_size = 0;
+    fprintf(stderr, "Stack allocated at: %p\n", stack);
+
+    // Setup the stack layout
+    // Calculate where our strings will go
+    size_t total_strings_size = 0;
+    int envc = 0;
+    
+    // Calculate space needed for argv strings
     for (int i = 0; i < info->argc; i++) {
-        strings_size += strlen(info->argv[i]) + 1;
+        total_strings_size += strlen(info->argv[i]) + 1;
     }
     
-    // Count and measure environment variables
-    int envc = 0;
+    // Calculate space needed for envp strings
     for (char** env = info->envp; *env != NULL; env++) {
-        strings_size += strlen(*env) + 1;
+        total_strings_size += strlen(*env) + 1;
         envc++;
     }
 
     // Calculate total space needed
-    size_t total_size = strings_size +
-                       (info->argc + 1) * sizeof(char*) +  // argv array + NULL
-                       (envc + 1) * sizeof(char*) +        // envp array + NULL
-                       sizeof(long);                       // argc
+    size_t stack_data_size = 
+        8 +                         // argc
+        ((info->argc + 1) * 8) +   // argv + NULL
+        ((envc + 1) * 8) +         // envp + NULL
+        16 +                       // minimal auxv (2 entries)
+        total_strings_size;        // actual strings
 
-    // Align stack top and reserve space
-    void* stack_top = (void*)((((uintptr_t)stack + info->stack_size) - total_size) & ~0xFULL);
-    
-    // String area starts after the arrays
-    char* string_area = (char*)stack_top + sizeof(long) +
-                       (info->argc + 1) * sizeof(char*) +
-                       (envc + 1) * sizeof(char*);
+    // Align to 16 bytes
+    stack_data_size = (stack_data_size + 15) & ~15;
 
-    // Setup arrays
-    long* argc_ptr = (long*)stack_top;
-    char** argv_ptr = (char**)(argc_ptr + 1);
-    char** envp_ptr = argv_ptr + info->argc + 1;
-    
-    // Copy argc
-    *argc_ptr = info->argc;
-    
-    // Copy argv strings and setup pointers
-    char* curr_str = string_area;
+    // Place stack_top near the end of our allocation, properly aligned
+    void* stack_top = (void*)((uintptr_t)(stack + aligned_stack_size - stack_data_size) & ~15ULL);
+
+    fprintf(stderr, "Stack data setup:\n");
+    fprintf(stderr, "  Stack top will be at: %p\n", stack_top);
+    fprintf(stderr, "  Total stack data size: %zu\n", stack_data_size);
+    fprintf(stderr, "  Distance from base: %ld\n", (char*)stack_top - (char*)stack);
+
+    // Write argc
+    *(long*)stack_top = info->argc;
+
+    // Setup argv pointers array
+    char** argv_ptr = (char**)(stack_top + 8);
+    char* str_area = (char*)(stack_top + 8 + ((info->argc + 1) * 8) + ((envc + 1) * 8) + 16);
+
+    // Copy argv strings and set up pointers
     for (int i = 0; i < info->argc; i++) {
         size_t len = strlen(info->argv[i]) + 1;
-        memcpy(curr_str, info->argv[i], len);
-        argv_ptr[i] = curr_str;
-        curr_str += len;
+        memcpy(str_area, info->argv[i], len);
+        argv_ptr[i] = str_area;
+        str_area += len;
     }
-    argv_ptr[info->argc] = NULL;  // NULL terminate argv
+    argv_ptr[info->argc] = NULL;
 
-    // Copy environment strings and setup pointers
+    // Setup envp pointers array
+    char** envp_ptr = argv_ptr + info->argc + 1;
+    
+    // Copy environment strings and set up pointers
     for (int i = 0; i < envc; i++) {
         size_t len = strlen(info->envp[i]) + 1;
-        memcpy(curr_str, info->envp[i], len);
-        envp_ptr[i] = curr_str;
-        curr_str += len;
+        memcpy(str_area, info->envp[i], len);
+        envp_ptr[i] = str_area;
+        str_area += len;
     }
-    envp_ptr[envc] = NULL;  // NULL terminate envp
+    envp_ptr[envc] = NULL;
+
+    // Set up minimal auxv
+    Elf64_auxv_t* auxv = (Elf64_auxv_t*)(envp_ptr + envc + 1);
+    auxv[0].a_type = AT_NULL;
+    auxv[0].a_un.a_val = 0;
+
+    // Test read access
+    fprintf(stderr, "Stack verification:\n");
+    fprintf(stderr, "  argc = %ld\n", *(long*)stack_top);
+    fprintf(stderr, "  argv[0] = %s\n", argv_ptr[0]);
+    if (envp_ptr[0]) {
+        fprintf(stderr, "  envp[0] = %s\n", envp_ptr[0]);
+    }
 
     // Store stack pointer
     info->prog_stack = stack_top;
 
-    // Verify setup
-    fprintf(stderr, "Stack layout verification:\n");
-    fprintf(stderr, "  argc = %ld\n", *argc_ptr);
-    fprintf(stderr, "  argv[0] = %s\n", argv_ptr[0]);
-    fprintf(stderr, "  Stack base: %p\n", stack);
-    fprintf(stderr, "  Stack top: %p\n", stack_top);
-    fprintf(stderr, "  argv array: %p\n", argv_ptr);
-    fprintf(stderr, "  envp array: %p\n", envp_ptr);
-    fprintf(stderr, "  String area: %p\n", string_area);
-    fprintf(stderr, "  Alignment check: %lx\n", (unsigned long)stack_top & 0xF);
+    // Final verification
+    fprintf(stderr, "Final stack alignment check: %ld\n", (unsigned long)stack_top & 15);
+    
+    // Show memory mappings
+    fprintf(stderr, "Memory map before transfer:\n");
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "cat /proc/%d/maps", getpid());
+    system(cmd);
 }
 
-
-
 static void transfer_control(program_info_t* info) {
-    // Get our stack layout pointers
     void* stack_top = info->prog_stack;
-    long* argc_ptr = (long*)stack_top;
-    char** argv_ptr = (char**)(argc_ptr + 1);
-    char** envp_ptr = argv_ptr + info->argc + 1;
+    void* entry = info->entry_point;
+    
+    // Debug prints
+    fprintf(stderr, "Transfer details:\n");
+    fprintf(stderr, "  Stack top: %p\n", stack_top);
+    fprintf(stderr, "  Stack alignment: %lx\n", (unsigned long)stack_top & 0xf);
+    fprintf(stderr, "  Entry point: %p\n", entry);
+    fprintf(stderr, "  First stack value: %lx\n", *(unsigned long*)stack_top);
 
-    // Verify our data is correct before transfer
-    fprintf(stderr, "Pre-transfer verification:\n");
-    fprintf(stderr, "  Entry point: 0x%lx\n", (unsigned long)info->entry_point);
-    fprintf(stderr, "  argc value: %ld at %p\n", *argc_ptr, argc_ptr);
-    fprintf(stderr, "  argv[0]: %s at %p\n", argv_ptr[0], argv_ptr);
-    fprintf(stderr, "  envp[0]: %s at %p\n", envp_ptr[0], envp_ptr);
+    // Make sure memory operations are complete
+    __sync_synchronize();
 
-    // Force the compiler to use specific registers
-    unsigned long entry = (unsigned long)info->entry_point;
-    unsigned long stack = (unsigned long)stack_top;
-    int argc = (int)*argc_ptr;
+    asm volatile (
+        // First move stack and entry point to registers we control
+        "mov %[stack], %%r11\n\t"
+        "mov %[entry], %%r12\n\t"
+        
+        // Clear essential registers
+        "xor %%rax, %%rax\n\t"
+        "xor %%rbx, %%rbx\n\t"
+        "xor %%rcx, %%rcx\n\t"
+        "xor %%rdx, %%rdx\n\t"
+        "xor %%rsi, %%rsi\n\t"
+        "xor %%rdi, %%rdi\n\t"
+        // "xor %%rbp, %%rbp\n\t"
+        "xor %%r8, %%r8\n\t"
+        "xor %%r9, %%r9\n\t"
+        "xor %%r10, %%r10\n\t"
+        "xor %%r13, %%r13\n\t"
+        "xor %%r14, %%r14\n\t"
+        "xor %%r15, %%r15\n\t"
 
-    // Clear direction flag
-    asm volatile("cld\n");
-
-    // Use specific registers and prevent compiler reordering
-    asm volatile(
-        "movq %0, %%rsp\n"     // Set stack pointer
-        "movq %1, %%rdi\n"     // Set argc
-        "movq %2, %%rsi\n"     // Set argv
-        "movq %3, %%rdx\n"     // Set envp
-        "xor %%rax, %%rax\n"   // Clear rax
-        "xor %%rbx, %%rbx\n"   // Clear rbx
-        "xor %%rbp, %%rbp\n"   // Clear rbp
-        "xor %%rcx, %%rcx\n"   // Clear rcx
-        "xor %%r8,  %%r8\n"    // Clear r8
-        "xor %%r9,  %%r9\n"    // Clear r9
-        "xor %%r10, %%r10\n"   // Clear r10
-        "xor %%r11, %%r11\n"   // Clear r11
-        "xor %%r12, %%r12\n"   // Clear r12
-        "xor %%r13, %%r13\n"   // Clear r13
-        "xor %%r14, %%r14\n"   // Clear r14
-        "xor %%r15, %%r15\n"   // Clear r15
-        "movq %4, %%rax\n"     // Put entry point in rax
-        "jmpq *%%rax\n"        // Jump to entry point
-        : // No outputs
-        : "r"(stack),
-          "r"((long)argc),
-          "r"(argv_ptr),
-          "r"(envp_ptr),
-          "r"(entry)
-        : "memory"
+        // Set up stack with saved value
+        "mov %%r11, %%rsp\n\t"
+        
+        // Set up args carefully - first test if we can read stack
+        "testq %%rsp, %%rsp\n\t"      // Verify RSP is valid
+        "mov (%%rsp), %%rdi\n\t"      // argc -> rdi
+        "lea 8(%%rsp), %%rsi\n\t"     // argv -> rsi
+        "lea 8(%%rsp,%%rdi,8), %%rdx\n\t" // envp -> rdx
+        "addq $8, %%rdx\n\t"
+        
+        // Clear direction flag
+        "cld\n\t"
+        
+        // Move entry point and jump
+        "mov %%r12, %%rax\n\t"
+        "jmpq *%%rax\n\t"
+        : // no outputs
+        : [stack] "r" (stack_top),
+          [entry] "r" (entry)
+        : "rax", "rbx", "rcx", "rdx", "rsi", "rdi",
+         "r8", "r9", "r10", "r11", "r12", "r13",
+          "r14", "r15", "memory", "cc"
     );
     __builtin_unreachable();
 }

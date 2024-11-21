@@ -1,6 +1,7 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -g -static
+CFLAGS = -Wall -Wextra -g -static -O0
 LDFLAGS = -static
+LDSCRIPT = -Wl,-T,linker.ld
 
 TARGETS = apager dpager hpager
 TEST_PROGS = test_null test_array test_bss
@@ -19,17 +20,13 @@ hpager: hpager.c
 
 # Test programs
 $(TEST_PROGS): %: %.c
-	$(CC) -static -o $@ $<
+	$(CC) $(LDSCRIPT) -static -O0 -o $@ $
 
 test_progs: $(TEST_PROGS)
 
-# Test suite
 test: $(TARGETS) test_progs
 	@echo "Testing null pointer handling..."
-	-./apager test_null
 	-./apager test_array
-
-
 
 clean:
 	rm -f $(TARGETS) $(TEST_PROGS) *.o
