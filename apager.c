@@ -154,8 +154,9 @@ static void setup_stack(program_info_t* info) {
         exit(1);
     }
 
-    // Stack grows down - start at the top and align
-    void* stack_top = (void*)(((uintptr_t)stack + info->stack_size) & ~0xFULL);
+    // Stack grows down - start at the top and align to 16 bytes
+    // Add 8 bytes to account for the push we'll do later
+    void* stack_top = (void*)((((uintptr_t)stack + info->stack_size) - 8) & ~0xFULL);
     uint64_t* stack_ptr = (uint64_t*)stack_top;
     
     // Count environment variables
@@ -164,9 +165,15 @@ static void setup_stack(program_info_t* info) {
         envc++;
     }
 
-    // Reserve space for everything
-    stack_ptr -= 1;  // For alignment
-    
+    // Calculate total items we'll push (for alignment)
+    int total_items = 1 + // argc
+                     info->argc + 1 + // argv + NULL
+                     envc + 1;  // envp + NULL
+
+    // Adjust stack pointer to maintain alignment after pushing all items
+    if (total_items % 2 == 0) {
+        stack_ptr--; // Add extra padding for alignment
+    }
     
     // Write values from bottom up
     uint64_t* base = stack_ptr;
@@ -191,21 +198,24 @@ static void setup_stack(program_info_t* info) {
     // Return to the base for the actual stack pointer
     info->prog_stack = base;
 
+    // Verify alignment
+    fprintf(stderr, "Stack alignment check:\n");
+    fprintf(stderr, "  Base address: %p\n", base);
+    fprintf(stderr, "  Alignment offset: %lu\n", (unsigned long)base & 0xF);
+    
+    if (((unsigned long)base & 0xF) != 0) {
+        fprintf(stderr, "Warning: Stack is not 16-byte aligned!\n");
+    }
+
     fprintf(stderr, "Stack setup:\n");
     fprintf(stderr, "  Base address: %p\n", stack);
     fprintf(stderr, "  Stack pointer: %p\n", base);
     fprintf(stderr, "  argv base: %p\n", argv_base);
     fprintf(stderr, "  envp base: %p\n", envp_base);
     fprintf(stderr, "  argc: %d\n", info->argc);
-
-    // Verify stack contents
-    fprintf(stderr, "Stack contents:\n");
-    uint64_t* verify = base;
-    fprintf(stderr, "  argc: %ld\n", *verify++);
-    for (int i = 0; i < info->argc; i++) {
-        fprintf(stderr, "  argv[%d]: %s\n", i, (char*)*verify++);
-    }
 }
+
+
 static void transfer_control(program_info_t* info) {
 
     register unsigned long stack asm("rsp") = (unsigned long)info->prog_stack;
@@ -213,6 +223,14 @@ static void transfer_control(program_info_t* info) {
     register char** argv asm("rsi") = (char**)((char*)info->prog_stack + 8);
     register char** envp asm("rdx") = argv + info->argc + 1;
     register unsigned long entry asm("r11") = (unsigned long)info->entry_point;
+
+
+    // Before assembly block
+    if (((uintptr_t)stack & 0xf) != 0) {
+        fprintf(stderr, "Stack not properly aligned\n");
+        exit(1);
+    }
+
 
     fprintf(stderr, "Transferring control: entry=%p, stack=%p, argc=%d\n", 
             info->entry_point, (void*)stack, argc);
