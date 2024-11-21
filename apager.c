@@ -155,8 +155,8 @@ static void setup_stack(program_info_t* info) {
     }
 
     // Stack grows down - start at the top and align
-    void* stack_top = stack + info->stack_size;
-    uint64_t* stack_ptr = (uint64_t*)((uintptr_t)stack_top & ~15ULL);
+    void* stack_top = (void*)(((uintptr_t)stack + info->stack_size) & ~0xFULL);
+    uint64_t* stack_ptr = (uint64_t*)stack_top;
     
     // Count environment variables
     int envc = 0;
@@ -166,27 +166,27 @@ static void setup_stack(program_info_t* info) {
 
     // Reserve space for everything
     stack_ptr -= 1;  // For alignment
-    stack_ptr = (uint64_t*)((uintptr_t)stack_ptr & ~15ULL);
+    
     
     // Write values from bottom up
     uint64_t* base = stack_ptr;
     
     // Push argc
-    *stack_ptr++ = info->argc;
+    *stack_ptr-- = info->argc;
     
     // Push argv pointers
     char** argv_base = (char**)stack_ptr;
     for (int i = 0; i < info->argc; i++) {
-        *stack_ptr++ = (uint64_t)info->argv[i];
+        *stack_ptr-- = (uint64_t)info->argv[i];
     }
-    *stack_ptr++ = 0;  // NULL terminator
+    *stack_ptr-- = 0;  // NULL terminator
     
     // Push envp pointers
     char** envp_base = (char**)stack_ptr;
     for (int i = 0; i < envc; i++) {
-        *stack_ptr++ = (uint64_t)info->envp[i];
+        *stack_ptr-- = (uint64_t)info->envp[i];
     }
-    *stack_ptr++ = 0;  // NULL terminator
+    *stack_ptr-- = 0;  // NULL terminator
 
     // Return to the base for the actual stack pointer
     info->prog_stack = base;
