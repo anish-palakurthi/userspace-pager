@@ -197,8 +197,10 @@ static void setup_stack(program_info_t* info) {
     stack_data_size = (stack_data_size + 15) & ~15;
 
     // Place stack_top near end
-    void* stack_top = (void*)((uintptr_t)(stack_base + aligned_stack_size - stack_data_size) & ~15ULL);
-    
+    uintptr_t sp = (uintptr_t)(stack_base + aligned_stack_size - stack_data_size);
+    sp = (sp & ~0x0F) - 8;  // Align to 16 bytes and subtract 8
+    void* stack_top = (void*)sp;
+        
     // Clear the stack area
     memset(stack_top, 0, stack_data_size);
 
@@ -274,7 +276,14 @@ static void transfer_control(program_info_t* info) {
 
     asm volatile (
 
-                    // Set up stack pointer
+        // Load arguments per x86_64 calling convention
+        "mov (%%rsp), %%rdi\n\t"          // argc -> rdi (1st arg)
+        "lea 8(%%rsp), %%rsi\n\t"         // argv -> rsi (2nd arg)
+        "lea 8(%%rsp,%%rdi,8), %%rdx\n\t" // calc envp position
+        "add $8, %%rdx\n\t"               // adjust envp
+
+
+        // Set up stack pointer
         "mov %[stack_top], %%rsp\n\t"
 
         // Push entry point
@@ -282,11 +291,6 @@ static void transfer_control(program_info_t* info) {
 
 
 
-        // Load arguments per x86_64 calling convention
-        "mov (%%rsp), %%rdi\n\t"          // argc -> rdi (1st arg)
-        "lea 8(%%rsp), %%rsi\n\t"         // argv -> rsi (2nd arg)
-        "lea 8(%%rsp,%%rdi,8), %%rdx\n\t" // calc envp position
-        "add $8, %%rdx\n\t"               // adjust envp
 
         // Clear all general-purpose registers
         "xor %%rax, %%rax\n\t"
