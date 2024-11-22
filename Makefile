@@ -20,7 +20,7 @@ hpager: hpager.c
 
 # Test programs
 $(TEST_PROGS): %: %.c
-	$(CC) $(LDSCRIPT) -static -O0 -o $@ $
+	$(CC) $(LDSCRIPT) -static -O0 -o $@
 
 test_progs: $(TEST_PROGS)
 
