@@ -1,0 +1,87 @@
+anishp@node-0:~/userspace-pager$ ./apager test_array
+File size: 900320 bytes
+Entry point: 401620
+Mapping .rodata segment at 0x400000
+Mapping segment 0:
+  vaddr: 0x400000
+  offset in file: 0x0
+  filesz: 1320
+  memsz: 1320
+  flags: 0x4
+  final_prot: 0x1
+Successfully mapped segment 0 at 0x7f3095ad7000
+Mapping .text segment at 0x401000
+Mapping segment 1:
+  vaddr: 0x401000
+  offset in file: 0x1000
+  filesz: 615901
+  memsz: 615901
+  flags: 0x5
+  final_prot: 0x5
+Successfully mapped segment 1 at 0x7f3095a40000
+Mapping .rodata segment at 0x498000
+Mapping segment 2:
+  vaddr: 0x498000
+  offset in file: 0x98000
+  filesz: 165166
+  memsz: 165166
+  flags: 0x4
+  final_prot: 0x1
+Successfully mapped segment 2 at 0x7f3095a17000
+Mapping .data segment at 0x4c17b0
+Mapping segment 3:
+  vaddr: 0x4c17b0
+  offset in file: 0xc07b0
+  filesz: 23264
+  memsz: 46224
+  flags: 0x6
+  final_prot: 0x3
+Successfully mapped segment 3 at 0x7f3095a0b000
+Final memory mappings:
+00400000-00401000 r--p 00000000 08:03 3999712                            /users/anishp/userspace-pager/apager
+00401000-0049b000 r-xp 00001000 08:03 3999712                            /users/anishp/userspace-pager/apager
+0049b000-004c4000 r--p 0009b000 08:03 3999712                            /users/anishp/userspace-pager/apager
+004c5000-004c9000 r--p 000c4000 08:03 3999712                            /users/anishp/userspace-pager/apager
+004c9000-004cc000 rw-p 000c8000 08:03 3999712                            /users/anishp/userspace-pager/apager
+004cc000-004d1000 rw-p 00000000 00:00 0 
+00ecd000-00eef000 rw-p 00000000 00:00 0                                  [heap]
+7f3095a0b000-7f3095a17000 rw-p 000c0000 08:03 3999727                    /users/anishp/userspace-pager/test_array
+7f3095a17000-7f3095a40000 r--p 00098000 08:03 3999727                    /users/anishp/userspace-pager/test_array
+7f3095a40000-7f3095ad7000 r-xp 00001000 08:03 3999727                    /users/anishp/userspace-pager/test_array
+7f3095ad7000-7f3095ad8000 r--p 00000000 08:03 3999727                    /users/anishp/userspace-pager/test_array
+7ffc95214000-7ffc95235000 rw-p 00000000 00:00 0                          [stack]
+7ffc95327000-7ffc9532b000 r--p 00000000 00:00 0                          [vvar]
+7ffc9532b000-7ffc9532d000 r-xp 00000000 00:00 0                          [vdso]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
+Stack allocated at: 0x700000000000
+Stack data setup:
+  Stack top will be at: 0x7000007ff360
+  Total stack data size: 3232
+  Distance from base: 8385376
+Stack verification:
+  argc = 1
+  argv[0] = test_array
+  envp[0] = SHELL=/bin/bash
+Final stack alignment check: 0
+Memory map before transfer:
+00400000-00401000 r--p 00000000 08:03 3999712                            /users/anishp/userspace-pager/apager
+00401000-0049b000 r-xp 00001000 08:03 3999712                            /users/anishp/userspace-pager/apager
+0049b000-004c4000 r--p 0009b000 08:03 3999712                            /users/anishp/userspace-pager/apager
+004c5000-004c9000 r--p 000c4000 08:03 3999712                            /users/anishp/userspace-pager/apager
+004c9000-004cc000 rw-p 000c8000 08:03 3999712                            /users/anishp/userspace-pager/apager
+004cc000-004d1000 rw-p 00000000 00:00 0 
+00ecd000-00eef000 rw-p 00000000 00:00 0                                  [heap]
+700000000000-700000800000 rw-p 00000000 00:00 0 
+7f3095a0b000-7f3095a17000 rw-p 000c0000 08:03 3999727                    /users/anishp/userspace-pager/test_array
+7f3095a17000-7f3095a40000 r--p 00098000 08:03 3999727                    /users/anishp/userspace-pager/test_array
+7f3095a40000-7f3095ad7000 r-xp 00001000 08:03 3999727                    /users/anishp/userspace-pager/test_array
+7f3095ad7000-7f3095ad8000 r--p 00000000 08:03 3999727                    /users/anishp/userspace-pager/test_array
+7ffc95214000-7ffc95235000 rw-p 00000000 00:00 0                          [stack]
+7ffc95327000-7ffc9532b000 r--p 00000000 00:00 0                          [vvar]
+7ffc9532b000-7ffc9532d000 r-xp 00000000 00:00 0                          [vdso]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
+Transfer details:
+  Stack top: 0x7000007ff360
+  Stack alignment: 0
+  Entry point: 0x401620
+  First stack value: 1
