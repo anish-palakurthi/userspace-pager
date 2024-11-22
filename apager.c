@@ -88,22 +88,11 @@ static void map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr, pro
         );
 
         if (mapped == MAP_FAILED) {
-            // If fixed mapping failed, try without MAP_FIXED
-            mapped = mmap(
-                NULL,
-                mapping_size,
-                initial_prot,
-                MAP_PRIVATE,
-                fd,
-                offset
-            );
-            
-            if (mapped == MAP_FAILED) {
-                perror("mmap");
-                fprintf(stderr, "Failed to map segment at address 0x%lx\n", aligned_vaddr);
-                exit(1);
-            }
+            perror("mmap");
+            fprintf(stderr, "Failed to map segment at address 0x%lx\n", aligned_vaddr);
+            exit(1);
         }
+
 
         // Track first PT_LOAD for phdr calculations
         if (first_load == NULL) {
@@ -287,7 +276,7 @@ static void transfer_control(program_info_t* info) {
 
                     // Set up stack pointer
         "mov %[stack_top], %%rsp\n\t"
-        
+
         // Push entry point
         "push %[entry]\n\t"
 
