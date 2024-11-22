@@ -302,8 +302,8 @@ static void transfer_control(program_info_t* info) {
         "mov %%r12, %%rax\n\t"
         "jmpq *%%rax\n\t"
         : // no outputs
-        : [stack] "r" (stack_top),
-          [entry] "r" (entry)
+        : [stack] "m" (stack_top),
+          [entry] "m" (entry)
         : "rax", "rbx", "rcx", "rdx", "rsi", "rdi",
          "r8", "r9", "r10", "r11", "r12", "r13",
           "r14", "r15", "memory", "cc"
