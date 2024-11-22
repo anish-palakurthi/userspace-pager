@@ -1,24 +1,30 @@
-// test_array.c - Tests sequential memory access pattern
-#include <stdio.h>
-#include <stdlib.h>
+#include <stdint.h>
+#include <time.h>
 
-#define ARRAY_SIZE (10 * 1024 * 1024)  // 10MB to span multiple pages
+#define ARRAY_SIZE (10 * 1024 * 1024) // 10MB
+
+static uint8_t data[ARRAY_SIZE];
 
 int main() {
-    int *array = malloc(ARRAY_SIZE * sizeof(int));
-    if (!array) {
-        fprintf(stderr, "Allocation failed\n");
-        return 1;
-    }
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
     
-    // Sequential access - good for testing prediction
-    long sum = 0;
+    // Sequential initialization
     for (int i = 0; i < ARRAY_SIZE; i++) {
-        array[i] = i;
-        sum += array[i];
+        data[i] = i & 0xFF;
     }
     
-    printf("Sum: %ld\n", sum);
-    free(array);
-    return 0;
+    // Sequential access
+    uint64_t checksum = 0;
+    for (int i = 0; i < ARRAY_SIZE; i++) {
+        checksum += data[i];
+    }
+    
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    uint64_t elapsed = (end.tv_sec - start.tv_sec) * 1000000000UL + 
+                      (end.tv_nsec - start.tv_nsec);
+    
+    // Prevent compiler from optimizing away the work
+    volatile uint64_t result = checksum + elapsed;
+    return result & 1;
 }

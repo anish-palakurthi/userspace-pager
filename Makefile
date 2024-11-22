@@ -4,7 +4,7 @@ LDFLAGS = -static
 LDSCRIPT = -Wl,-T,linker.ld
 
 TARGETS = apager dpager hpager
-TEST_PROGS = test_null test_array test_bss
+TEST_PROGS = test_mixed test_array test_matrix
 
 all: $(TARGETS)
 
