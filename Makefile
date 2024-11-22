@@ -8,6 +8,8 @@ TEST_PROGS = test_mixed test_array test_matrix
 
 all: $(TARGETS)
 
+
+# gcc -fPIE -pie -Wall -Wextra -g -O0 -o apager apager.c
 # Pager targets
 apager: apager.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)

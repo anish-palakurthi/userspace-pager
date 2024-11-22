@@ -296,7 +296,7 @@ static void transfer_control(program_info_t* info) {
         "xor %%rax, %%rax\n\t"
         "xor %%rbx, %%rbx\n\t"
         "xor %%rcx, %%rcx\n\t"
-        // "xor %%rdx, %%rdx\n\t"
+        "xor %%rdx, %%rdx\n\t"
         // "xor %%rsi, %%rsi\n\t"
         // "xor %%rdi, %%rdi\n\t"
 
