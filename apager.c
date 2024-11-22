@@ -45,7 +45,7 @@ static void map_program_segments(int fd, Elf64_Ehdr* ehdr, Elf64_Phdr* phdr) {
 
     fprintf(stderr, "Entry point: %lx\n", (unsigned long)ehdr->e_entry);
     
-    for (int i = 0; i < ehdr->e_phnum; i++) {
+    for (int i = 0; i < ehdr->e_phnum +1; i++) {
         if (phdr[i].p_type != PT_LOAD)
             continue;
 
