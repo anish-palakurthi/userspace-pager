@@ -255,58 +255,42 @@ static void transfer_control(program_info_t* info) {
     void* stack_top = info->prog_stack;
     void* entry = info->entry_point;
     
-    // Debug prints
     fprintf(stderr, "Transfer details:\n");
     fprintf(stderr, "  Stack top: %p\n", stack_top);
     fprintf(stderr, "  Stack alignment: %lx\n", (unsigned long)stack_top & 0xf);
     fprintf(stderr, "  Entry point: %p\n", entry);
     fprintf(stderr, "  First stack value: %lx\n", *(unsigned long*)stack_top);
 
-    // Make sure memory operations are complete
     __sync_synchronize();
 
     asm volatile (
-        // First move stack and entry point to registers we control
-        "mov %[stack], %%r11\n\t"
-        "mov %[entry], %%r12\n\t"
+        // Set up stack first
+        "mov %[stack], %%rsp\n\t"
         
-        // Clear essential registers
-        "xor %%rax, %%rax\n\t"
-        "xor %%rbx, %%rbx\n\t"
-        "xor %%rcx, %%rcx\n\t"
-        "xor %%rdx, %%rdx\n\t"
-        "xor %%rsi, %%rsi\n\t"
-        "xor %%rdi, %%rdi\n\t"
-        // "xor %%rbp, %%rbp\n\t"
-        "xor %%r8, %%r8\n\t"
-        "xor %%r9, %%r9\n\t"
-        "xor %%r10, %%r10\n\t"
-        "xor %%r13, %%r13\n\t"
-        "xor %%r14, %%r14\n\t"
-        "xor %%r15, %%r15\n\t"
-
-        // Set up stack with saved value
-        "mov %%r11, %%rsp\n\t"
+        // Load arguments per x86_64 calling convention
+        "mov (%%rsp), %%rdi\n\t"          // argc -> rdi (1st arg)
+        "lea 8(%%rsp), %%rsi\n\t"         // argv -> rsi (2nd arg)
+        "lea 8(%%rsp,%%rdi,8), %%rdx\n\t" // calc envp position
+        "add $8, %%rdx\n\t"               // adjust envp
         
-        // Set up args carefully - first test if we can read stack
-        "testq %%rsp, %%rsp\n\t"      // Verify RSP is valid
-        "mov (%%rsp), %%rdi\n\t"      // argc -> rdi
-        "lea 8(%%rsp), %%rsi\n\t"     // argv -> rsi
-        "lea 8(%%rsp,%%rdi,8), %%rdx\n\t" // envp -> rdx
-        "addq $8, %%rdx\n\t"
+        // Save envp in r8 temporarily since we need rdx
+        "mov %%rdx, %%r8\n\t"
         
-        // Clear direction flag
-        "cld\n\t"
+        // Get entry point back into rdx
+        "mov %[entry], %%rdx\n\t"
         
-        // Move entry point and jump
-        "mov %%r12, %%rax\n\t"
-        "jmpq *%%rax\n\t"
-        : // no outputs
-        : [stack] "m" (stack_top),
-          [entry] "m" (entry)
-        : "rax", "rbx", "rcx", "rdx", "rsi", "rdi",
-         "r8", "r9", "r10", "r11", "r12", "r13",
-          "r14", "r15", "memory", "cc"
+        // Restore envp to proper register
+        "mov %%r8, %%rdx\n\t"
+        
+        "cld\n\t"                         // Clear direction flag
+        
+        // Call entry point - using r11 to avoid clobbering args
+        "mov %[entry], %%r11\n\t"
+        "call *%%r11\n\t"
+        : 
+        : [stack] "r" (stack_top),
+          [entry] "r" (entry)
+        : "memory", "cc", "rdi", "rsi", "rdx", "r8", "r11"
     );
     __builtin_unreachable();
 }
